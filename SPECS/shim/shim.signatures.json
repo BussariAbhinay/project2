@@ -1,5 +1,6 @@
 {
  "Signatures": {
-  "signed-shim-15.4-2.tar.gz": "5e3e23f37466332cff2ea378e23041b1b558d4c64ad739b8b8404c582d95cbad"
+  "shimaa64.efi": "0656ac85ebb4094af12e0938a8c700aeca33c274e35a93f42f5c8a10b15d171b",
+  "shimx64.efi": "d7b81b4abddf2caffbea056d3ffa0811277c59c4b052b11d49050dbdb76dffdf"
  }
 }
