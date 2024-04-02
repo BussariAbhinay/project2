@@ -16,6 +16,9 @@
 # binaries with binaries that have been signed by the Azure Linux
 # signing key.
 #
+# To test secure boot after making changes to this, or the
+# shim-unsigned package, see the TESTING file.
+#
 
 %ifarch x86_64
 %global efiarch x64

@@ -1,0 +1,225 @@
+
+Any changes to the shim-unsigned package, or this package, may require
+manual testing of the resulting EFI binaries. This describes the
+manual process to perform the testing.
+
+Since the shim binary is externally signed, while the fb/mm binaries
+are signed (only) by our production pipelines, testing new versions
+will require manually signing the shim and mm/fb binaries with
+separate keys, and the public part of the key used to sign mm/fb
+binaries must be embedded into the shim during the shim-unsigned
+build.
+
+Note that these instructions are for x86-64, for aarch64 systems,
+replace all 'x64' with 'aa64'. Also, replace all instances of $VERSION
+with the appropriate version number.
+
+
+
+1) Generate local signing certificates
+
+Install required packages:
+
+$ sudo dnf install pesign nss-tools efivar
+
+Create local signing certificates for testing, using the 'make-certs'
+script from the pesign source (replace '/usr/src/azl' with whatever
+the rpm %_topdir macro location is for your system):
+
+$ sudo dnf download --source pesign
+$ sudo rpm -i pesign-$VERSION
+$ cd /usr/src/azl
+$ sudo rpmbuild -bp SPECS/pesign.spec
+$ cd BUILD/pesign-$VERSION
+$ cd src/certs
+$ sudo ./make-certs KeyInDB azurelinux@microsoft.com all codesign 1.3.6.1.4.1.311.10.3.1
+$ sudo ./make-certs KeyInShim azurelinux@microsoft.com all codesign 1.3.6.1.4.1.311.10.3.1
+
+Now, optionally, remove your pesign DB (you only need to do this if
+you might have old stuff in it):
+
+$ sudo rm -rfv /etc/pki/pesign/*
+
+Now put the root CA and the signing certificates into your pesign db:
+
+$ sudo certutil -d /etc/pki/pesign -A -n 'my CA' -t CT,CT,CT -i ca.crt
+$ sudo pk12util -d /etc/pki/pesign -i KeyInDB.p12
+$ sudo pk12util -d /etc/pki/pesign -i KeyInShim.p12
+$ sudo certutil -d /etc/pki/pesign -A -i KeyInDB.crt -n KeyInDB -t u
+$ sudo certutil -d /etc/pki/pesign -A -i KeyInShim.crt -n KeyInShim -t u
+
+
+
+2) Rebuild the shim-unsigned package
+
+Note that including the KeyInShim inside the shim EFI binary is
+optional; if you do not need to test the shim loading the mm/fb
+binaries, there is no need to sign the mm/fb binaries (since you are
+not testing them) and you do not need to resign the boot loader or
+kernel (since you are building the shim with the Azure Linux
+production certificate embedded), and you can proceed to the next step.
+
+First, get the KeyInShim certificate in DER format:
+
+$ sudo certutil -d /etc/pki/pesign -L -n KeyInShim -r > key-in-shim.der
+
+Because the shim package can only have a single embedded certificate,
+you have 2 options on how to embed the test certificate in the shim.
+
+Option a) Replace the production Azure Linux certificate
+
+This will result in a shim that contains *only* the test certificate,
+and will only be able to load other EFI binaries signed by the test
+certificate. This means the shim will not be able to load the
+production-signed boot loader or kernel, so you must resign them.
+
+This option simply requires replacing the *.der file that the
+shim-unsigned package is currently using, with the key-in-shim.der
+file, and rebuild the shim-unsigned package.
+
+Option b) Include both certificates
+
+This will result in a shim that contains *both* the test certificate
+and the production certificate, and will be able to load the
+test-signed mm/fb binaries as well as production-signed boot loader
+and kernel.
+
+This option requires generating a DB file with both certificates
+(adjust the production certificate name as needed):
+
+$ efisecdb -o db.x64.esl -g 'f4de3b90-399b-4eb0-aa3f-041c434a2de3' -a -c azurelinux-ca-20230216.der -c key-in-shim.der
+
+Then change the shim-unsigned spec file to use the 'db.x64.esl'
+Source, and replace the use of 'VENDOR_CERT_FILE=...' with
+'VENDOR_DB_FILE=...' and rebuild the package.
+
+
+
+3) Sign the mm/fb binaries (if needed)
+
+If you skipped the previous step (including KeyInShim in the shim),
+then skip this step as well.
+
+After building the shim-unsigned package, install it onto your build
+system. Get the mm/fb binaries (located at
+/usr/share/shim/$VERSION/x64/) and sign them using KeyInShim:
+
+$ sudo pesign -s -i mmx64.efi -o mmx64.efi.signed -c KeyInShim
+$ sudo pesign -s -i fbx64.efi -o fbx64.efi.signed -c KeyInShim
+
+Change the mode:
+
+$ sudo chmod 644 mmx64.efi.signed
+$ sudo chmod 644 fbx64.efi.signed
+
+Then replace the originals:
+
+$ sudo mv mmx64.efi.signed /usr/share/shim/$VERSION/x64/mmx64.efi 
+$ sudo mv fbx64.efi.signed /usr/share/shim/$VERSION/x64/fbx64.efi 
+
+
+
+3) Build the shim package with a signed shim
+
+With the shim-unsigned package installed onto the build system (from
+the step above), get the shim EFI binary (located at
+/usr/share/shim/$VERSION/x64/shimx64.efi) and sign it using KeyInDB:
+
+$ sudo pesign -s -i shimx64.efi -o shimx64.efi.signed -c KeyInDB
+
+Provide the signed EFI binary as the Source0 to the shim package, and
+build it.
+
+
+
+5) Disable secure boot
+
+You'll want to disable secure boot on your test system at this point,
+while you set up the remaining parts. The specific method to disable
+secure boot depends on the test system. For a VM under Qemu using
+OMVF, you can reboot to the firmware menu:
+
+$ sudo systemctl reboot --firmware-setup
+
+Then navigate to:
+
+"Device Manager" ->
+  "Secure Boot Configuration" ->
+    "Attempt Secure Boot" (change this to "[ ]")
+
+Then exit the firmware menu and reboot.
+
+
+6) Install the new shim-x64 package
+
+Install the new shim-x64 package from the earlier step onto your test
+system. Reboot, while secure boot is disabled, to verify that the shim
+and other boot path components still work correctly while secure boot
+is disabled. If the system fails to boot, there is a problem with the
+new shim package unrelated to secure boot signing that must be fixed
+before proceeding.
+
+
+
+7) Sign the boot loader and kernel (if needed)
+
+If you replaced the production certificate embedded in the shim
+(option 2a above) then you must re-sign the boot loader and
+kernel. Get the EFI binaries directly from your test system (the boot
+loader is under /boot/efi/EFI and probably named 'grubx64.efi', while
+the kernel is in /boot and probably named 'vmlinuz-$VERSION') and then
+add new signatures to them using KeyInShim:
+
+$ sudo pesign -s -i grubx64.efi -o grubx64.efi.signed -c KeyInShim
+$ sudo pesign -s -i vmlinuz-$VERSION -o vmlinuz-$VERSION.signed -c KeyInShim
+
+Then copy or move the signed files back into place under /boot
+(removing the '.signed' suffix).
+
+
+
+7) Enroll KeyInDB into the test system UEFI DB
+
+Get the KeyInDB certificate in DER format:
+
+$ sudo certutil -d /etc/pki/pesign -L -n KeyInDB -r > key-in-db.der
+
+Then place it onto your test system's ESP partition, so the UEFI
+firmware can access it:
+
+$ sudo cp key-in-db.der /boot/efi/EFI/
+
+Now you must add it into your UEFI DB. The specific method to add a
+certificate to your DB depends on the test system. For a VM under Qemu
+using OMVF, you can reboot to the firmware menu:
+
+$ sudo systemctl reboot --firmware-setup
+
+Then navigate to:
+
+"Device Manager" ->
+  "Secure Boot Configuration" ->
+    "Secure Boot Mode" (change this to "<Custom Mode>") ->
+      "Custom Secure Boot Options" ->
+        "DB Options" ->
+          "Enroll Signature" ->
+            "Enroll Signature Using File"
+
+Now, select the volume containing your ESP partition and then the EFI
+directory, and select the "key-in-db.der" file. Leave the "Signature
+GUID" empty and select "Commit Change and Exit".
+
+
+
+8) Enable secure boot and test the new shim
+
+All parts are now in place, so while you are still in the firmware
+menu (or reboot back into the firmware menu, if needed) navigate the
+menu to re-enable secure boot, and then exit the firmware menu and
+reboot.
+
+The system should boot up normally, using secure boot, and result in a
+running system. If not, there is a problem with the signing of one or
+more parts of the boot path. If you are upgrading to a new version of
+the shim, remember to make sure you also update grub so its SBAT level
+is at or higher than what the new shim requires.
