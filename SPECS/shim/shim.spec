@@ -1,3 +1,21 @@
+#
+# This generates a shim-x64 (or shim-aa64 for arm) package which
+# contains all the necessary files located under /boot. The shim EFI
+# binary is not taken directly from the shim-unsigned package, but
+# instead must be externally reviewed and approved (by
+# https://github.com/rhboot/shim-review) and will then be externally
+# signed, and provided to this build as Source0. The fallback (fb) and
+# mokmanager (mm) EFI binaries are taken directly from the
+# shim-unsigned package, and are *not* signed when this package is
+# built.
+#
+# However, when building through the 'official' build pipelines, the
+# resulting binary rpm will be modified using rpm hackery by the
+# 'SPECS-SIGNED/shim-signed' packaging in combination with a special
+# signing ADO pipeline stage, to replace the 'fb' and 'mm' EFI
+# binaries with binaries that have been signed by the Azure Linux
+# signing key.
+#
 
 %ifarch x86_64
 %global efiarch x64
