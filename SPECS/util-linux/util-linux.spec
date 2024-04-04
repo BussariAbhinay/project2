@@ -1,7 +1,7 @@
 %define majminorver %(echo %{version} | cut -d. -f1-2)
 Summary:        Utilities for file systems, consoles, partitions, and messages
 Name:           util-linux
-Version:        2.39.2
+Version:        2.40
 Release:        1%{?dist}
 License:        GPLv2+
 Vendor:         Microsoft Corporation
@@ -141,6 +141,8 @@ rm -rf %{buildroot}/lib/systemd/system
 /lib/libuuid.so.*
 /lib/libsmartcols.so.*
 /lib/libfdisk.so.*
+/lib/liblastlog2.so.*
+/lib/security/pam_lastlog2.so
 
 %files devel
 %defattr(-,root,root)
@@ -151,6 +153,9 @@ rm -rf %{buildroot}/lib/systemd/system
 %{_mandir}/man3/*
 
 %changelog
+* Wed Apr 03 2024 Betty Lakes <bettylakes@microsoft.com> - 2.40-1
+- Upgrade to 2.40
+
 * Tue Nov 28 2023 Andrew Phelps <anphel@microsoft.com> - 2.39.2-1
 - Upgrade to 2.39.2
 
