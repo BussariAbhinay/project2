@@ -338,7 +338,6 @@ func (b *LiveOSIsoBuilder) extractBootDirFiles(writeableRootfsDir string) error 
 
 	b.dump("Starting extractBootDirFiles()")
 
-	sourceBootDir := filepath.Join(writeableRootfsDir, "/boot")
 	b.artifacts.additionalFiles = make(map[string]string)
 
 	// the following files will be re-created - no need to copy them only to
@@ -1136,21 +1135,18 @@ func (b *LiveOSIsoBuilder) createWriteableImageFromSquashfs(buildDir, rawImageFi
 	safetyFactor = 2
 	safeDiskSizeMB := diskSizeMB * safetyFactor
 
-	var bootPartitionEnd uint64
-	bootPartitionEnd = 9
+	var bootPartitionEnd imagecustomizerapi.DiskSize
+	bootPartitionEnd = imagecustomizerapi.DiskSize(9)
 
 	diskConfig := imagecustomizerapi.Disk{
 		PartitionTableType: imagecustomizerapi.PartitionTableTypeGpt,
-		MaxSize:            safeDiskSizeMB,
+		MaxSize:            imagecustomizerapi.DiskSize(safeDiskSizeMB),
 		Partitions: []imagecustomizerapi.Partition{
 			{
 				Id:    "esp",
 				Start: 1,
 				End:   &bootPartitionEnd,
-				Flags: []imagecustomizerapi.PartitionFlag{
-					imagecustomizerapi.PartitionFlagESP,
-					imagecustomizerapi.PartitionFlagBoot,
-				},
+				Type:  imagecustomizerapi.PartitionTypeESP,
 			},
 			{
 				Id:    "rootfs",
