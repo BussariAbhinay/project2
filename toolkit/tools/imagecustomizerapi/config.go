@@ -8,7 +8,7 @@ import "fmt"
 type Config struct {
 	Storage *Storage `yaml:"storage"`
 	Iso     *Iso     `yaml:"iso"`
-	OS      OS       `yaml:"os"`
+	OS      *OS      `yaml:"os"`
 }
 
 func (c *Config) IsValid() (err error) {

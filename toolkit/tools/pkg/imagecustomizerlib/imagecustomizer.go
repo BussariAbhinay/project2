@@ -80,7 +80,7 @@ type CommonParameters struct {
 
 	configPath                  string
 	config                      *imagecustomizerapi.Config
-	osCustomizations            bool
+	customizeOSPartitions       bool
 	useBaseImageRpmRepos        bool
 	rpmsSources                 []string
 	enableShrinkFilesystems     bool
@@ -126,10 +126,7 @@ func initCommonParameters(buildDir string,
 	// configuration
 	cp.configPath = configPath
 	cp.config = config
-	//
-	// ToDo: how do we know if there is os customizations?
-	//
-	cp.osCustomizations = true
+	cp.customizeOSPartitions = (config.Storage != nil) || (config.OS != nil)
 
 	cp.useBaseImageRpmRepos = useBaseImageRpmRepos
 	cp.rpmsSources = rpmsSources
@@ -234,7 +231,7 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 			return fmt.Errorf("failed to load input iso artifacts:\n%w", err)
 		}
 
-		if cp.osCustomizations {
+		if cp.customizeOSPartitions {
 			logger.Log.Debugf("---- dev ---- converting squashfs into a full writeable disk image...")
 			err := cp.isoBuilder.createWriteableImageFromSquashfs(cp.buildDir, cp.rawImageFile)
 			if err != nil {
@@ -256,7 +253,7 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 func (cp *CommonParameters) customizeRawDiskImage() error {
 
 	logger.Log.Debugf("---- dev ---- customizing full disk image...")
-	if !cp.osCustomizations {
+	if !cp.customizeOSPartitions {
 		logger.Log.Debugf("---- dev ---- skipping customizing full disk image...")
 		return nil
 	}
@@ -324,7 +321,7 @@ func (cp *CommonParameters) convertRawDiskImageToOutputImage() error {
 			return fmt.Errorf("failed to convert image file to format: %s:\n%w", cp.outputImageFormat, err)
 		}
 	case ImageFormatIso:
-		if cp.osCustomizations {
+		if cp.customizeOSPartitions {
 			logger.Log.Debugf("---- dev ---- creating the final iso from customized raw image...")
 			err := createLiveOSIsoImage(cp.buildDir, cp.configPath, cp.config.Iso, cp.rawImageFile, cp.outputImageDir, cp.outputImageBase)
 			if err != nil {
@@ -372,7 +369,7 @@ func validateConfig(baseConfigPath string, config *imagecustomizerapi.Config, rp
 		return err
 	}
 
-	err = validateSystemConfig(baseConfigPath, &config.OS, rpmsSources, useBaseImageRpmRepos,
+	err = validateSystemConfig(baseConfigPath, config.OS, rpmsSources, useBaseImageRpmRepos,
 		partitionsCustomized)
 	if err != nil {
 		return err
