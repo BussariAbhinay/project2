@@ -906,16 +906,13 @@ func createLiveOSIsoImage(buildDir, baseConfigPath string, isoConfig *imagecusto
 	return nil
 }
 
-func expandIso(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
-	logger.Log.Debugf("---- dev ---- expandIso() - 1 - isoImageFile=%s", isoImageFile)
+func convertIsoImageToFolder(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
 
 	mountDir, err := ioutil.TempDir(buildDir, "tmp-iso-mount-")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary mount folder for iso:\n%w", err)
 	}
 	defer os.RemoveAll(mountDir)
-
-	logger.Log.Debugf("---- dev ---- expandIso() - 2 - created mountDir=%s", mountDir)
 
 	mountParams := []string{isoImageFile, mountDir}
 	err = shell.ExecuteLive(false, "mount", mountParams...)
@@ -930,14 +927,10 @@ func expandIso(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
 		}
 	}()
 
-	logger.Log.Debugf("---- dev ---- expandIso() - 3 - mounted")
-
 	err = os.MkdirAll(isoExpandionFolder, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed to create folder %s:\n%w", isoExpandionFolder, err)
 	}
-
-	logger.Log.Debugf("---- dev ---- expandIso() - 4 - copying %s to %s", mountDir, isoExpandionFolder)
 
 	err = copyPartitionFiles(mountDir+"/.", isoExpandionFolder)
 	if err != nil {
@@ -948,7 +941,7 @@ func expandIso(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
 }
 
 func isoBuilderFromLayout(buildDir, isoExpandionFoldr string) (isoBuilder *LiveOSIsoBuilder, err error) {
-	logger.Log.Debugf("---- dev ---- fromLayout() - 1")
+	logger.Log.Debugf("---- dev ---- isoBuilderFromLayout() - 1")
 
 	isoBuildDir := filepath.Join(buildDir, "tmp")
 	err = os.MkdirAll(isoBuildDir, os.ModePerm)

@@ -80,6 +80,7 @@ type CommonParameters struct {
 
 	configPath                  string
 	config                      *imagecustomizerapi.Config
+	osCustomizations            bool
 	useBaseImageRpmRepos        bool
 	rpmsSources                 []string
 	enableShrinkFilesystems     bool
@@ -92,6 +93,8 @@ type CommonParameters struct {
 	outputImageFile       string
 	outputImageDir        string
 	outputImageBase       string
+
+	isoBuilder *LiveOSIsoBuilder
 }
 
 func initCommonParameters(buildDir string,
@@ -123,6 +126,10 @@ func initCommonParameters(buildDir string,
 	// configuration
 	cp.configPath = configPath
 	cp.config = config
+	//
+	// ToDo: how do we know if there is os customizations?
+	//
+	cp.osCustomizations = true
 
 	cp.useBaseImageRpmRepos = useBaseImageRpmRepos
 	cp.rpmsSources = rpmsSources
@@ -203,24 +210,11 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 }
 
 func (cp *CommonParameters) convertInputImageToRawDisk() error {
+
 	logger.Log.Debugf("---- dev ---- converting input image to raw disk")
 
-	// Is input an iso?
-	imageFileExtension := filepath.Ext(cp.inputImageFile)
-	isInputImageIso := false
-	if imageFileExtension == ".iso" {
-		isInputImageIso = true
-	}
+	if filepath.Ext(cp.inputImageFile) == ".iso" {
 
-	var isoBuilder *LiveOSIsoBuilder
-
-	//
-	// ToDo: how do we know if there is os customizations?
-	//
-	osCustomizations := true
-
-	// Load iso meta data...
-	if isInputImageIso {
 		logger.Log.Debugf("---- dev ---- input image is iso. Expanding...")
 
 		isoExpansionFolder, err := ioutil.TempDir(cp.buildDirAbs, "expanded-input-iso-")
@@ -230,30 +224,21 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 		// clean-up
 		// defer os.RemoveAll(isoExpansionFolder)
 
-		err = expandIso(cp.buildDir, cp.inputImageFile, isoExpansionFolder)
+		err = convertIsoImageToFolder(cp.buildDir, cp.inputImageFile, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to expand input iso file:\n%w", err)
 		}
 
-		isoBuilder, err = isoBuilderFromLayout(cp.buildDir, isoExpansionFolder)
+		cp.isoBuilder, err = isoBuilderFromLayout(cp.buildDir, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to load input iso artifacts:\n%w", err)
 		}
-	}
 
-	// Create writeable image
-	if isInputImageIso {
-		if osCustomizations {
+		if cp.osCustomizations {
 			logger.Log.Debugf("---- dev ---- converting squashfs into a full writeable disk image...")
-			err := isoBuilder.createWriteableImageFromSquashfs(cp.buildDir, cp.rawImageFile)
+			err := cp.isoBuilder.createWriteableImageFromSquashfs(cp.buildDir, cp.rawImageFile)
 			if err != nil {
 				return fmt.Errorf("failed to create writeable image:\n%w", err)
-			}
-		} else {
-			logger.Log.Debugf("---- dev ---- no squashfs customizations, customizing iso file system only...")
-			err := isoBuilder.recreateLiveOSIsoImage(cp.configPath, cp.config.Iso, cp.outputImageDir, cp.outputImageBase)
-			if err != nil {
-				return fmt.Errorf("failed to create LiveOS ISO:\n%w", err)
 			}
 		}
 	} else {
@@ -271,6 +256,10 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 func (cp *CommonParameters) customizeRawDiskImage() error {
 
 	logger.Log.Debugf("---- dev ---- customizing full disk image...")
+	if !cp.osCustomizations {
+		logger.Log.Debugf("---- dev ---- skipping customizing full disk image...")
+		return nil
+	}
 
 	// Customize the partitions.
 	partitionsCustomized, newRawImageFile, err := customizePartitions(cp.buildDirAbs, cp.configPath, cp.config, cp.rawImageFile)
@@ -335,10 +324,18 @@ func (cp *CommonParameters) convertRawDiskImageToOutputImage() error {
 			return fmt.Errorf("failed to convert image file to format: %s:\n%w", cp.outputImageFormat, err)
 		}
 	case ImageFormatIso:
-		logger.Log.Debugf("---- dev ---- creating the final iso...")
-		err := createLiveOSIsoImage(cp.buildDir, cp.configPath, cp.config.Iso, cp.rawImageFile, cp.outputImageDir, cp.outputImageBase)
-		if err != nil {
-			return err
+		if cp.osCustomizations {
+			logger.Log.Debugf("---- dev ---- creating the final iso from customized raw image...")
+			err := createLiveOSIsoImage(cp.buildDir, cp.configPath, cp.config.Iso, cp.rawImageFile, cp.outputImageDir, cp.outputImageBase)
+			if err != nil {
+				return err
+			}
+		} else {
+			logger.Log.Debugf("---- dev ---- no squashfs customizations, customizing iso file system only...")
+			err := cp.isoBuilder.recreateLiveOSIsoImage(cp.configPath, cp.config.Iso, cp.outputImageDir, cp.outputImageBase)
+			if err != nil {
+				return fmt.Errorf("failed to create LiveOS ISO:\n%w", err)
+			}
 		}
 	}
 
