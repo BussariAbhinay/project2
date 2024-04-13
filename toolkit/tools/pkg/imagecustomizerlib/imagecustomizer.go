@@ -72,57 +72,141 @@ func CustomizeImageWithConfigFile(buildDir string, configFile string, imageFile 
 	return nil
 }
 
+type CommonParameters struct {
+	buildDir    string
+	buildDirAbs string
+
+	inputImageFile string
+
+	configPath                  string
+	config                      *imagecustomizerapi.Config
+	useBaseImageRpmRepos        bool
+	rpmsSources                 []string
+	enableShrinkFilesystems     bool
+	outputSplitPartitionsFormat string
+
+	rawImageFile string
+
+	outputImageFormat     string
+	qemuOutputImageFormat string
+	outputImageFile       string
+	outputImageDir        string
+	outputImageBase       string
+}
+
+func initCommonParameters(buildDir string,
+	inputImageFile string,
+	configPath string, config *imagecustomizerapi.Config,
+	useBaseImageRpmRepos bool, rpmsSources []string, enableShrinkFilesystems bool, outputSplitPartitionsFormat string,
+	outputImageFormat string, outputImageFile string) (*CommonParameters, error) {
+
+	cp := &CommonParameters{}
+
+	// working directories
+	cp.buildDir = buildDir
+
+	buildDirAbs, err := filepath.Abs(buildDir)
+	if err != nil {
+		return nil, err
+	}
+
+	cp.buildDirAbs = buildDirAbs
+
+	err = os.MkdirAll(cp.buildDirAbs, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+
+	// input
+	cp.inputImageFile = inputImageFile
+
+	// configuration
+	cp.configPath = configPath
+	cp.config = config
+
+	cp.useBaseImageRpmRepos = useBaseImageRpmRepos
+	cp.rpmsSources = rpmsSources
+
+	cp.enableShrinkFilesystems = enableShrinkFilesystems
+	cp.outputSplitPartitionsFormat = outputSplitPartitionsFormat
+
+	// writeable image
+	cp.rawImageFile = filepath.Join(buildDirAbs, BaseImageName)
+
+	// output
+	cp.outputImageFormat = outputImageFormat
+	cp.outputImageFile = outputImageFile
+	cp.outputImageBase = strings.TrimSuffix(filepath.Base(outputImageFile), filepath.Ext(outputImageFile))
+	cp.outputImageDir = filepath.Dir(outputImageFile)
+
+	if cp.outputImageFormat != "" && cp.outputImageFormat != ImageFormatIso {
+		cp.qemuOutputImageFormat, err = toQemuImageFormat(cp.outputImageFormat)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = os.MkdirAll(cp.outputImageDir, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+
+	return cp, nil
+}
+
 func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomizerapi.Config, imageFile string,
 	rpmsSources []string, outputImageFile string, outputImageFormat string, outputSplitPartitionsFormat string,
 	useBaseImageRpmRepos bool, enableShrinkFilesystems bool,
 ) error {
 	var err error
-	var qemuOutputImageFormat string
 
-	outputImageBase := strings.TrimSuffix(filepath.Base(outputImageFile), filepath.Ext(outputImageFile))
-	outputImageDir := filepath.Dir(outputImageFile)
-
-	// Validate 'outputImageFormat' value if specified.
-	if outputImageFormat != "" && outputImageFormat != ImageFormatIso {
-		qemuOutputImageFormat, err = toQemuImageFormat(outputImageFormat)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Validate config.
 	err = validateConfig(baseConfigPath, config, rpmsSources, useBaseImageRpmRepos)
 	if err != nil {
 		return fmt.Errorf("invalid image config:\n%w", err)
 	}
 
-	// Normalize 'buildDir' path.
-	buildDirAbs, err := filepath.Abs(buildDir)
+	cp, err := initCommonParameters(buildDir, imageFile, baseConfigPath, config,
+		useBaseImageRpmRepos, rpmsSources, enableShrinkFilesystems, outputSplitPartitionsFormat,
+		outputImageFormat, outputImageFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to initialize image customizer state:\n%w", err)
 	}
 
-	// Create 'buildDir' directory.
-	err = os.MkdirAll(buildDirAbs, os.ModePerm)
+	err = cp.convertInputImageToRawDisk()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to convert input image to writeable raw image:\n%w", err)
 	}
-
-	// Convert image file to raw format, so that a kernel loop device can be used to make changes to the image.
-	rawImageFile := filepath.Join(buildDirAbs, BaseImageName)
 	defer func() {
-		cleanupErr := file.RemoveFileIfExists(rawImageFile)
+		cleanupErr := file.RemoveFileIfExists(cp.rawImageFile)
 		if cleanupErr != nil {
 			if err != nil {
-				err = fmt.Errorf("%w:\nfailed to clean-up (%s): %w", err, rawImageFile, cleanupErr)
+				err = fmt.Errorf("%w:\nfailed to clean-up (%s): %w", err, cp.rawImageFile, cleanupErr)
 			} else {
-				err = fmt.Errorf("failed to clean-up (%s): %w", rawImageFile, cleanupErr)
+				err = fmt.Errorf("failed to clean-up (%s): %w", cp.rawImageFile, cleanupErr)
 			}
 		}
 	}()
 
+	err = cp.customizeRawDiskImage()
+	if err != nil {
+		return fmt.Errorf("failed to customize raw image:\n%w", err)
+	}
+
+	err = cp.convertRawDiskImageToOutputImage()
+	if err != nil {
+		return fmt.Errorf("failed to convert customized raw image to output format:\n%w", err)
+	}
+
+	logger.Log.Infof("Success!")
+
+	return nil
+}
+
+func (cp *CommonParameters) convertInputImageToRawDisk() error {
+	logger.Log.Debugf("---- dev ---- converting input image to raw disk")
+
 	// Is input an iso?
-	imageFileExtension := filepath.Ext(imageFile)
+	imageFileExtension := filepath.Ext(cp.inputImageFile)
 	isInputImageIso := false
 	if imageFileExtension == ".iso" {
 		isInputImageIso = true
@@ -130,26 +214,28 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 
 	var isoBuilder *LiveOSIsoBuilder
 
+	//
 	// ToDo: how do we know if there is os customizations?
+	//
 	osCustomizations := true
 
 	// Load iso meta data...
 	if isInputImageIso {
-		logger.Log.Debugf("---- dev ---- input is iso - 1")
+		logger.Log.Debugf("---- dev ---- input image is iso. Expanding...")
 
-		isoExpansionFolder, err := ioutil.TempDir(buildDirAbs, "expanded-input-iso-")
+		isoExpansionFolder, err := ioutil.TempDir(cp.buildDirAbs, "expanded-input-iso-")
 		if err != nil {
 			return fmt.Errorf("failed to create temporary iso expansion folder for iso:\n%w", err)
 		}
 		// clean-up
 		// defer os.RemoveAll(isoExpansionFolder)
 
-		err = expandIso(buildDir, imageFile, isoExpansionFolder)
+		err = expandIso(cp.buildDir, cp.inputImageFile, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to expand input iso file:\n%w", err)
 		}
 
-		isoBuilder, err = isoBuilderFromLayout(buildDir, isoExpansionFolder)
+		isoBuilder, err = isoBuilderFromLayout(cp.buildDir, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to load input iso artifacts:\n%w", err)
 		}
@@ -157,92 +243,104 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 
 	// Create writeable image
 	if isInputImageIso {
-		logger.Log.Debugf("---- dev ---- input is iso - 2")
-
 		if osCustomizations {
-			logger.Log.Debugf("---- dev ---- there is os customization - 3")
-			err = isoBuilder.createWriteableImageFromSquashfs(buildDir, rawImageFile)
+			logger.Log.Debugf("---- dev ---- converting squashfs into a full writeable disk image...")
+			err := isoBuilder.createWriteableImageFromSquashfs(cp.buildDir, cp.rawImageFile)
 			if err != nil {
 				return fmt.Errorf("failed to create writeable image:\n%w", err)
 			}
 		} else {
-			logger.Log.Debugf("---- dev ---- there is no os customization - 4")
-			err = isoBuilder.recreateLiveOSIsoImage(baseConfigPath, config.Iso, outputImageDir, outputImageBase)
+			logger.Log.Debugf("---- dev ---- no squashfs customizations, customizing iso file system only...")
+			err := isoBuilder.recreateLiveOSIsoImage(cp.configPath, cp.config.Iso, cp.outputImageDir, cp.outputImageBase)
 			if err != nil {
 				return fmt.Errorf("failed to create LiveOS ISO:\n%w", err)
 			}
 		}
 	} else {
-		logger.Log.Debugf("---- dev ---- input is not iso - 5")
-		logger.Log.Infof("Creating raw base image: %s", rawImageFile)
-		err = shell.ExecuteLiveWithErr(1, "qemu-img", "convert", "-O", "raw", imageFile, rawImageFile)
+		logger.Log.Debugf("---- dev ---- converting input disk image into a full writeable disk image...")
+		logger.Log.Infof("Creating raw base image: %s", cp.rawImageFile)
+		err := shell.ExecuteLiveWithErr(1, "qemu-img", "convert", "-O", "raw", cp.inputImageFile, cp.rawImageFile)
 		if err != nil {
 			return fmt.Errorf("failed to convert image file to raw format:\n%w", err)
 		}
 	}
 
+	return nil
+}
+
+func (cp *CommonParameters) customizeRawDiskImage() error {
+
+	logger.Log.Debugf("---- dev ---- customizing full disk image...")
+
 	// Customize the partitions.
-	partitionsCustomized, rawImageFile, err := customizePartitions(buildDirAbs, baseConfigPath, config, rawImageFile)
+	partitionsCustomized, newRawImageFile, err := customizePartitions(cp.buildDirAbs, cp.configPath, cp.config, cp.rawImageFile)
 	if err != nil {
 		return err
 	}
+	cp.rawImageFile = newRawImageFile
 
 	// Customize the raw image file.
-	err = customizeImageHelper(buildDirAbs, baseConfigPath, config, rawImageFile, rpmsSources, useBaseImageRpmRepos,
+	err = customizeImageHelper(cp.buildDirAbs, cp.configPath, cp.config, cp.rawImageFile, cp.rpmsSources, cp.useBaseImageRpmRepos,
 		partitionsCustomized)
 	if err != nil {
 		return err
 	}
 
 	// Shrink the filesystems.
-	if enableShrinkFilesystems {
-		err = shrinkFilesystemsHelper(rawImageFile)
+	if cp.enableShrinkFilesystems {
+		err = shrinkFilesystemsHelper(cp.rawImageFile)
 		if err != nil {
 			return fmt.Errorf("failed to shrink filesystems:\n%w", err)
 		}
 	}
 
-	if config.OS.Verity != nil {
+	if cp.config.OS.Verity != nil {
 		// Customize image for dm-verity, setting up verity metadata and security features.
-		err = customizeVerityImageHelper(buildDirAbs, baseConfigPath, config, rawImageFile, rpmsSources, useBaseImageRpmRepos)
+		err = customizeVerityImageHelper(cp.buildDirAbs, cp.configPath, cp.config, cp.rawImageFile, cp.rpmsSources, cp.useBaseImageRpmRepos)
 		if err != nil {
 			return err
 		}
 	}
 
 	// Check file systems for corruption.
-	err = checkFileSystems(rawImageFile)
+	err = checkFileSystems(cp.rawImageFile)
 	if err != nil {
 		return fmt.Errorf("failed to check filesystems:\n%w", err)
 	}
 
-	// Create final output image file if requested.
-	switch outputImageFormat {
-	case ImageFormatVhd, ImageFormatVhdx, ImageFormatQCow2, ImageFormatRaw:
-		logger.Log.Infof("Writing: %s", outputImageFile)
-
-		os.MkdirAll(outputImageDir, os.ModePerm)
-		err = shell.ExecuteLiveWithErr(1, "qemu-img", "convert", "-O", qemuOutputImageFormat, rawImageFile, outputImageFile)
+	// If outputSplitPartitionsFormat is specified, extract the partition files.
+	if cp.outputSplitPartitionsFormat != "" {
+		logger.Log.Infof("Extracting partition files")
+		err = extractPartitionsHelper(cp.rawImageFile, cp.outputImageDir, cp.outputImageBase, cp.outputSplitPartitionsFormat)
 		if err != nil {
-			return fmt.Errorf("failed to convert image file to format: %s:\n%w", outputImageFormat, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (cp *CommonParameters) convertRawDiskImageToOutputImage() error {
+
+	logger.Log.Debugf("---- dev ---- converting writeable full disk image into final image...")
+
+	// Create final output image file if requested.
+	switch cp.outputImageFormat {
+	case ImageFormatVhd, ImageFormatVhdx, ImageFormatQCow2, ImageFormatRaw:
+		logger.Log.Debugf("---- dev ---- creating the final full disk image...")
+		logger.Log.Infof("Writing: %s", cp.outputImageFile)
+
+		err := shell.ExecuteLiveWithErr(1, "qemu-img", "convert", "-O", cp.qemuOutputImageFormat, cp.rawImageFile, cp.outputImageFile)
+		if err != nil {
+			return fmt.Errorf("failed to convert image file to format: %s:\n%w", cp.outputImageFormat, err)
 		}
 	case ImageFormatIso:
-		err = createLiveOSIsoImage(buildDir, baseConfigPath, config.Iso, rawImageFile, outputImageDir, outputImageBase)
+		logger.Log.Debugf("---- dev ---- creating the final iso...")
+		err := createLiveOSIsoImage(cp.buildDir, cp.configPath, cp.config.Iso, cp.rawImageFile, cp.outputImageDir, cp.outputImageBase)
 		if err != nil {
 			return err
 		}
 	}
-
-	// If outputSplitPartitionsFormat is specified, extract the partition files.
-	if outputSplitPartitionsFormat != "" {
-		logger.Log.Infof("Extracting partition files")
-		err = extractPartitionsHelper(rawImageFile, outputImageDir, outputImageBase, outputSplitPartitionsFormat)
-		if err != nil {
-			return err
-		}
-	}
-
-	logger.Log.Infof("Success!")
 
 	return nil
 }
