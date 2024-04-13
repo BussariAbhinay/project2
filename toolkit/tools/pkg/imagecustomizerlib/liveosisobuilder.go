@@ -906,7 +906,7 @@ func createLiveOSIsoImage(buildDir, baseConfigPath string, isoConfig *imagecusto
 	return nil
 }
 
-func convertIsoImageToFolder(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
+func copyIsoImageContentsToFolder(buildDir, isoImageFile, isoExpandionFolder string) (err error) {
 
 	mountDir, err := ioutil.TempDir(buildDir, "tmp-iso-mount-")
 	if err != nil {
@@ -940,8 +940,8 @@ func convertIsoImageToFolder(buildDir, isoImageFile, isoExpandionFolder string) 
 	return nil
 }
 
-func isoBuilderFromLayout(buildDir, isoExpandionFoldr string) (isoBuilder *LiveOSIsoBuilder, err error) {
-	logger.Log.Debugf("---- dev ---- isoBuilderFromLayout() - 1")
+func isoBuilderFromFolder(buildDir, isoExpandionFoldr string) (isoBuilder *LiveOSIsoBuilder, err error) {
+	logger.Log.Debugf("---- dev ---- isoBuilderFromFolder() - 1")
 
 	isoBuildDir := filepath.Join(buildDir, "tmp")
 	err = os.MkdirAll(isoBuildDir, os.ModePerm)

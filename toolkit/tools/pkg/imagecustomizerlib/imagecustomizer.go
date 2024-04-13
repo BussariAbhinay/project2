@@ -176,7 +176,7 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 		return fmt.Errorf("failed to initialize image customizer state:\n%w", err)
 	}
 
-	err = cp.convertInputImageToRawDisk()
+	err = cp.convertInputImageToWriteableFormat()
 	if err != nil {
 		return fmt.Errorf("failed to convert input image to writeable raw image:\n%w", err)
 	}
@@ -191,12 +191,12 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 		}
 	}()
 
-	err = cp.customizeRawDiskImage()
+	err = cp.customizeOSContents()
 	if err != nil {
 		return fmt.Errorf("failed to customize raw image:\n%w", err)
 	}
 
-	err = cp.convertRawDiskImageToOutputImage()
+	err = cp.convertWriteableFormatToOutputImage()
 	if err != nil {
 		return fmt.Errorf("failed to convert customized raw image to output format:\n%w", err)
 	}
@@ -206,7 +206,7 @@ func CustomizeImage(buildDir string, baseConfigPath string, config *imagecustomi
 	return nil
 }
 
-func (cp *CommonParameters) convertInputImageToRawDisk() error {
+func (cp *CommonParameters) convertInputImageToWriteableFormat() error {
 
 	logger.Log.Debugf("---- dev ---- converting input image to raw disk")
 
@@ -221,12 +221,12 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 		// clean-up
 		// defer os.RemoveAll(isoExpansionFolder)
 
-		err = convertIsoImageToFolder(cp.buildDir, cp.inputImageFile, isoExpansionFolder)
+		err = copyIsoImageContentsToFolder(cp.buildDir, cp.inputImageFile, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to expand input iso file:\n%w", err)
 		}
 
-		cp.isoBuilder, err = isoBuilderFromLayout(cp.buildDir, isoExpansionFolder)
+		cp.isoBuilder, err = isoBuilderFromFolder(cp.buildDir, isoExpansionFolder)
 		if err != nil {
 			return fmt.Errorf("failed to load input iso artifacts:\n%w", err)
 		}
@@ -250,7 +250,7 @@ func (cp *CommonParameters) convertInputImageToRawDisk() error {
 	return nil
 }
 
-func (cp *CommonParameters) customizeRawDiskImage() error {
+func (cp *CommonParameters) customizeOSContents() error {
 
 	logger.Log.Debugf("---- dev ---- customizing full disk image...")
 	if !cp.customizeOSPartitions {
@@ -306,7 +306,7 @@ func (cp *CommonParameters) customizeRawDiskImage() error {
 	return nil
 }
 
-func (cp *CommonParameters) convertRawDiskImageToOutputImage() error {
+func (cp *CommonParameters) convertWriteableFormatToOutputImage() error {
 
 	logger.Log.Debugf("---- dev ---- converting writeable full disk image into final image...")
 
